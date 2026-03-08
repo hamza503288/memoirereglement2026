@@ -85,10 +85,12 @@ interface MemoireDB {
   date_paiement: string | null;
   details?: MemoireLine[];
   pdf_url?: string;
+  titre?: string;
 }
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<'create' | 'view'>('create');
+  const [memoireTitre, setMemoireTitre] = useState('');
 
   // Form State
   const [branche, setBranche] = useState<Branche>('Automobile');
@@ -204,7 +206,8 @@ export default function Home() {
       doc.setFontSize(18);
       doc.setTextColor(37, 106, 84);
       doc.setFont('helvetica', 'bold');
-      doc.text('MÉMOIRE DE RÈGLEMENT', 148, 50, { align: 'center' });
+      const finalTitle = memoireTitre.trim() !== '' ? memoireTitre.toUpperCase() : 'MÉMOIRE DE RÈGLEMENT';
+      doc.text(finalTitle, 148, 50, { align: 'center' });
 
       // Date and Client Main
       doc.setFontSize(12);
@@ -278,6 +281,7 @@ export default function Home() {
       // 2. Save to Supabase (Database table)
       const memoireToSave = {
         client: lines[0].client,
+        titre: finalTitle,
         date_memoire: new Date().toISOString().split('T')[0],
         total_prime: totalPrimes,
         statut: 'Non payée',
@@ -295,6 +299,7 @@ export default function Home() {
 
       showToast('Mémoire générée et enregistrée avec succès', 'success');
       setLines([]); // Vider le tableau
+      setMemoireTitre(''); // Vider le titre
 
     } catch (error: any) {
       showToast('Erreur lors de l\'enregistrement : ' + error?.message, 'error');
@@ -554,14 +559,24 @@ export default function Home() {
               </div>
 
               {lines.length > 0 && (
-                <div className="p-4 bg-white border-t border-border flex justify-end">
+                <div className="p-4 bg-white border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="w-full sm:w-1/2">
+                    <label className="block text-sm font-medium mb-1">Titre de la Mémoire <span className="text-muted-foreground">(Optionnel)</span></label>
+                    <input
+                      type="text"
+                      className="input-field font-semibold"
+                      placeholder="Ex: MÉMOIRE DE RÈGLEMENT (Par défaut)"
+                      value={memoireTitre}
+                      onChange={(e) => setMemoireTitre(e.target.value)}
+                    />
+                  </div>
                   <button
                     onClick={generatePDF}
                     disabled={loading}
-                    className="btn-secondary py-3 px-6 text-base"
+                    className="btn-secondary py-3 px-6 text-base whitespace-nowrap"
                   >
                     <FileText size={20} />
-                    {loading ? 'Génération en cours...' : 'Générer Mémoire de Règlement'}
+                    {loading ? 'Génération en cours...' : 'Générer la Mémoire'}
                   </button>
                 </div>
               )}
@@ -582,7 +597,8 @@ export default function Home() {
                 <table className="w-full text-sm text-left">
                   <thead className="table-header text-xs uppercase bg-secondary text-primary-foreground">
                     <tr>
-                      <th className="px-6 py-3 rounded-tl-lg">Client Principal</th>
+                      <th className="px-6 py-3 rounded-tl-lg">Titre</th>
+                      <th className="px-6 py-3">Client Principal</th>
                       <th className="px-6 py-3">Date de Mémoire</th>
                       <th className="px-6 py-3">Total (DT)</th>
                       <th className="px-6 py-3">Statut</th>
@@ -593,20 +609,21 @@ export default function Home() {
                   <tbody>
                     {fetching ? (
                       <tr>
-                        <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
+                        <td colSpan={7} className="px-6 py-8 text-center text-muted-foreground">
                           Chargement des données...
                         </td>
                       </tr>
                     ) : memoires.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground italic">
+                        <td colSpan={7} className="px-6 py-8 text-center text-muted-foreground italic">
                           Aucune mémoire enregistrée.
                         </td>
                       </tr>
                     ) : (
                       memoires.map((m) => (
                         <tr key={m.id} className="bg-white border-b hover:bg-gray-50/50 transition-colors">
-                          <td className="px-6 py-4 font-bold">{m.client}</td>
+                          <td className="px-6 py-4 font-bold text-gray-700">{m.titre || 'MÉMOIRE DE RÈGLEMENT'}</td>
+                          <td className="px-6 py-4 font-medium">{m.client}</td>
                           <td className="px-6 py-4">
                             {format(new Date(m.date_memoire), 'dd/MM/yyyy')}
                           </td>

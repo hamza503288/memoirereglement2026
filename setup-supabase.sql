@@ -26,3 +26,4 @@ ALTER TABLE memoires DISABLE ROW LEVEL SECURITY;
 
 -- 4. Message de confirmation
 SELECT 'Table "memoires" configurée avec succès !' as message;
+ALTER TABLE memoires ADD COLUMN IF NOT EXISTS titre TEXT DEFAULT 'MEMOIRE DE REGLEMENT'; 
