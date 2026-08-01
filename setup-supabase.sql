@@ -17,7 +17,9 @@ CREATE TABLE memoires (
   total_prime NUMERIC(15, 3) NOT NULL,
   statut TEXT DEFAULT 'Non payée',
   date_paiement DATE,
-  details JSONB -- Optionnel : Permet de sauvegarder dans la base les lignes du tableau généré.
+  details JSONB, -- Optionnel : Permet de sauvegarder dans la base les lignes du tableau généré.
+  solde_non_regle NUMERIC(15, 3),
+  historique_paiements JSONB DEFAULT '[]'::jsonb
 );
 
 -- 3. Désactiver temporairement la sécurité RLS (Row Level Security) 
