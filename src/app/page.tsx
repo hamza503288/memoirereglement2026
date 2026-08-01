@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { FileText, Save, List, CheckCircle, Trash2, PlusCircle, LayoutDashboard, Calculator, Percent, History } from 'lucide-react';
+import { FileText, Save, List, CheckCircle, Trash2, PlusCircle, LayoutDashboard, Calculator, Percent, History, LogOut, User } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 function numberToFrench(num: number): string {
@@ -117,6 +117,12 @@ export default function Home() {
   const [partialAmount, setPartialAmount] = useState<string>('');
   const [partialDate, setPartialDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [historyViewMemoire, setHistoryViewMemoire] = useState<MemoireDB | null>(null);
+
+  // Auth state
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [loginUsername, setLoginUsername] = useState<string>('Ahlem');
+  const [loginPassword, setLoginPassword] = useState<string>('');
+  const [isMounted, setIsMounted] = useState(false);
 
   const branches: Branche[] = ['Automobile', 'MRH', 'MRP', 'MRE', 'MRA', 'Santé', 'Vie', 'Incendie', 'Ristourne'];
 
@@ -430,11 +436,148 @@ export default function Home() {
     }
   };
 
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const users: Record<string, string> = {
+      'Ahlem': '123',
+      'Raoue': '987',
+      'Hamza': '007H'
+    };
+
+    if (users[loginUsername] === loginPassword) {
+      setCurrentUser(loginUsername);
+      localStorage.setItem('memoire_auth_user', loginUsername);
+      showToast(`Bienvenue, ${loginUsername} !`, 'success');
+      setLoginPassword('');
+    } else {
+      showToast('Mot de passe incorrect', 'error');
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('memoire_auth_user');
+    showToast('Déconnexion réussie', 'success');
+  };
+
+  const deleteMemoire = async (id: string) => {
+    if (currentUser !== 'Hamza') {
+      showToast('Seul Hamza est autorisé à supprimer des mémoires', 'error');
+      return;
+    }
+
+    if (!confirm('Êtes-vous sûr de vouloir supprimer définitivement cette mémoire ?')) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('memoires')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      showToast('Mémoire supprimée avec succès', 'success');
+      setMemoires(memoires.filter(m => m.id !== id));
+    } catch (error: any) {
+      showToast('Erreur de suppression: ' + error?.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (activeTab === 'view') {
+    setIsMounted(true);
+    const savedUser = localStorage.getItem('memoire_auth_user');
+    if (savedUser) {
+      setCurrentUser(savedUser);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'view' && currentUser) {
       fetchMemoires();
     }
-  }, [activeTab]);
+  }, [activeTab, currentUser]);
+
+  if (!isMounted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 text-foreground">
+        <div className="text-secondary font-bold text-lg animate-pulse">Chargement de la session...</div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4 relative overflow-hidden text-foreground">
+        {/* Decorative background shapes */}
+        <div className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] rounded-full bg-[#A1C936]/10 blur-3xl pointer-events-none"></div>
+        <div className="absolute bottom-[-20%] right-[-10%] w-[600px] h-[600px] rounded-full bg-[#256A54]/10 blur-3xl pointer-events-none"></div>
+        
+        {toast && (
+          <div className={`fixed top-4 right-4 z-50 px-6 py-3 rounded-md shadow-lg text-white animate-fade-in flex items-center gap-2 ${toast.type === 'success' ? 'bg-primary' : 'bg-destructive'}`}>
+            {toast.type === 'success' ? <CheckCircle size={20} /> : <div className="font-bold">!</div>}
+            {toast.message}
+          </div>
+        )}
+
+        <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-border overflow-hidden animate-fade-in relative z-10">
+          <div className="p-8 bg-[#256A54] text-white text-center relative">
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(161,201,54,0.15),transparent)] pointer-events-none"></div>
+            <img src="/logo.png" alt="STAR Assurances" className="h-16 mx-auto object-contain mb-4 bg-white/10 p-2 rounded-lg" onError={(e) => { e.currentTarget.style.display = 'none' }} />
+            <h2 className="text-2xl font-bold">STAR Assurances</h2>
+            <p className="text-white/80 text-sm mt-1">Gestion des Mémoires de Règlement</p>
+          </div>
+          
+          <form onSubmit={handleLogin} className="p-8 space-y-6">
+            <h3 className="text-xl font-semibold text-secondary text-center mb-2">Authentification</h3>
+            
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">Utilisateur <span className="text-destructive">*</span></label>
+              <select
+                className="input-field cursor-pointer bg-white"
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                required
+              >
+                <option value="Ahlem">Ahlem</option>
+                <option value="Raoue">Raoue</option>
+                <option value="Hamza">Hamza</option>
+              </select>
+            </div>
+            
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">Mot de passe <span className="text-destructive">*</span></label>
+              <input
+                type="password"
+                className="input-field"
+                placeholder="Entrez votre mot de passe"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            
+            <button
+              type="submit"
+              className="btn-primary w-full py-3 mt-4 text-base font-semibold transition-all hover:scale-[1.01] cursor-pointer"
+            >
+              <User size={18} />
+              Se connecter
+            </button>
+          </form>
+          
+          <div className="p-4 bg-gray-50 border-t border-border text-center text-xs text-muted-foreground">
+            Agence SHIRI FARES HAMZA — MATEUR
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col items-center">
@@ -447,30 +590,63 @@ export default function Home() {
       )}
 
       {/* Header App */}
-      <header className="w-full bg-white border-b border-border py-4 px-6 md:px-12 flex items-center justify-between shadow-sm sticky top-0 z-40">
-        <div className="flex items-center gap-4">
-          <img src="/logo.png" alt="STAR Assurances" className="h-12 object-contain hidden sm:block" onError={(e) => { e.currentTarget.style.display = 'none' }} />
-          <h1 className="text-2xl font-bold text-secondary flex items-center gap-2">
-            <Calculator className="text-primary h-7 w-7" />
-            Mémoires de Règlement
-          </h1>
+      <header className="w-full bg-white border-b border-border py-4 px-6 md:px-12 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm sticky top-0 z-40">
+        <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-start">
+          <div className="flex items-center gap-2">
+            <img src="/logo.png" alt="STAR Assurances" className="h-12 object-contain hidden sm:block" onError={(e) => { e.currentTarget.style.display = 'none' }} />
+            <h1 className="text-2xl font-bold text-secondary flex items-center gap-2">
+              <Calculator className="text-primary h-7 w-7" />
+              Mémoires de Règlement
+            </h1>
+          </div>
+          {/* Mobile User Info & Logout */}
+          <div className="flex items-center gap-2 md:hidden">
+            <span className="bg-secondary/10 text-secondary text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1 border border-secondary/20">
+              <User size={12} />
+              {currentUser}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="text-red-500 hover:text-red-700 p-1.5 rounded-full hover:bg-red-50 transition-colors"
+              title="Déconnexion"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
 
-        <div className="flex gap-2">
-          <button
-            onClick={() => setActiveTab('create')}
-            className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'create' ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-muted'}`}
-          >
-            <PlusCircle size={18} />
-            <span className="hidden sm:inline">Créer</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('view')}
-            className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'view' ? 'bg-secondary text-secondary-foreground' : 'text-foreground hover:bg-muted'}`}
-          >
-            <List size={18} />
-            <span className="hidden sm:inline">Liste</span>
-          </button>
+        <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setActiveTab('create')}
+              className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'create' ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-muted'}`}
+            >
+              <PlusCircle size={18} />
+              <span>Créer</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('view')}
+              className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'view' ? 'bg-secondary text-secondary-foreground' : 'text-foreground hover:bg-muted'}`}
+            >
+              <List size={18} />
+              <span>Liste</span>
+            </button>
+          </div>
+          
+          {/* Desktop User Info & Logout */}
+          <div className="hidden md:flex items-center gap-3 border-l border-border pl-4">
+            <span className="bg-secondary/10 text-secondary text-sm px-3 py-1.5 rounded-full font-bold flex items-center gap-1.5 border border-secondary/20">
+              <User size={14} className="text-primary" />
+              {currentUser}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="text-gray-500 hover:text-red-600 hover:bg-red-50 p-2 rounded-full transition-colors cursor-pointer"
+              title="Déconnexion"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -782,6 +958,18 @@ export default function Home() {
                                 <History size={16} />
                                 Historique
                               </button>
+                              
+                              {/* Only show delete button for Hamza */}
+                              {currentUser === 'Hamza' && (
+                                <button
+                                  onClick={() => deleteMemoire(m.id)}
+                                  className="bg-red-500 text-white hover:bg-red-600 px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
+                                  title="Supprimer la mémoire"
+                                >
+                                  <Trash2 size={16} />
+                                  Supprimer
+                                </button>
+                              )}
                             </td>
                           </tr>
                         );
