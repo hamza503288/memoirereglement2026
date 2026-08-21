@@ -136,7 +136,7 @@ export default function Home() {
   const [paidMap, setPaidMap] = useState<Record<string, number>>({});
 
   // Stats drill-down state
-  const [statsDrilldown, setStatsDrilldown] = useState<'none' | 'paye'>('none');
+  const [statsDrilldown, setStatsDrilldown] = useState<'none' | 'paye' | 'nonpaye'>('none');
 
   const branches: Branche[] = ['Automobile', 'MRH', 'MRP', 'MRE', 'MRA', 'Santé', 'Vie', 'Incendie', 'Ristourne'];
 
@@ -880,10 +880,13 @@ export default function Home() {
           const totalMontant = memoires.reduce((acc, m) => acc + Number(m.total_prime), 0);
           const totalVerse = memoires.reduce((acc, m) => acc + (paidMap[m.id] || 0), 0);
           const totalSolde = totalMontant - totalVerse;
+          const nonPayeeList = memoires.filter(m => m.statut !== 'Payée' && m.statut !== 'Partiellement payée');
+          const nonPayeeMontant = nonPayeeList.reduce((acc, m) => acc + Number(m.total_prime), 0);
 
-          const Donut = ({ segments, size = 200, strokeWidth = 28, centerLabel, centerValue, centerColor }: {
-            segments: { value: number; color: string; label: string }[];
-            size?: number; strokeWidth?: number; centerLabel: string; centerValue: string; centerColor: string;
+          const Donut = ({ segments, size = 220, strokeWidth = 30, centerValue, centerLabel, centerColor, onSegmentClick }: {
+            segments: { value: number; color: string; label: string; clickable?: boolean; onClick?: () => void }[];
+            size?: number; strokeWidth?: number; centerValue: string; centerLabel: string; centerColor: string;
+            onSegmentClick?: (index: number) => void;
           }) => {
             const radius = (size - strokeWidth) / 2;
             const circumference = 2 * Math.PI * radius;
@@ -891,8 +894,8 @@ export default function Home() {
             let offset = 0;
             return (
               <div className="flex flex-col items-center">
-                <div className="relative" style={{ width: size, height: size }}>
-                  <svg width={size} height={size} className="-rotate-90">
+                <div className="relative group" style={{ width: size, height: size }}>
+                  <svg width={size} height={size} className="-rotate-90 drop-shadow-sm">
                     <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke="#f1f5f9" strokeWidth={strokeWidth} />
                     {segments.map((seg, i) => {
                       const len = (seg.value / totalSeg) * circumference;
@@ -904,30 +907,49 @@ export default function Home() {
                           strokeDasharray={`${len} ${circumference - len}`}
                           strokeDashoffset={-offset}
                           strokeLinecap="round"
-                          style={{ transition: 'stroke-dasharray 0.6s ease, stroke-dashoffset 0.6s ease' }}
+                          className={seg.clickable ? 'cursor-pointer transition-all duration-300 hover:opacity-80' : ''}
+                          style={{ transition: 'stroke-dasharray 0.6s ease, stroke-dashoffset 0.6s ease, opacity 0.2s ease' }}
+                          onClick={() => seg.clickable && seg.onClick?.()}
                         />
                       );
                       offset += len;
                       return el;
                     })}
                   </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-3xl font-bold" style={{ color: centerColor }}>{centerValue}</span>
-                    <span className="text-xs text-muted-foreground mt-1">{centerLabel}</span>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <span className="text-4xl font-extrabold tracking-tight" style={{ color: centerColor }}>{centerValue}</span>
+                    <span className="text-xs text-muted-foreground mt-1 font-medium">{centerLabel}</span>
                   </div>
                 </div>
-                <div className="flex flex-wrap justify-center gap-3 mt-4">
+                <div className="flex flex-wrap justify-center gap-4 mt-5">
                   {segments.map((s, i) => (
-                    <div key={i} className="flex items-center gap-1.5 text-sm">
-                      <span className="w-3 h-3 rounded-full" style={{ background: s.color }} />
-                      <span className="text-muted-foreground">{s.label}</span>
-                      <span className="font-bold">{s.value}</span>
-                    </div>
+                    <button
+                      key={i}
+                      onClick={() => s.clickable && s.onClick?.()}
+                      className={`flex items-center gap-2 text-sm rounded-lg px-3 py-1.5 transition-all ${s.clickable ? 'cursor-pointer hover:bg-muted' : 'cursor-default'}`}
+                    >
+                      <span className="w-3.5 h-3.5 rounded-full shadow-sm" style={{ background: s.color }} />
+                      <span className="text-muted-foreground font-medium">{s.label}</span>
+                      <span className="font-bold text-foreground">{s.value}</span>
+                    </button>
                   ))}
                 </div>
               </div>
             );
           };
+
+          const StatCard = ({ icon: Icon, label, value, unit, color, bg, border }: {
+            icon: any; label: string; value: string; unit: string; color: string; bg: string; border: string;
+          }) => (
+            <div className={`${bg} ${border} border rounded-2xl p-5 flex flex-col gap-1.5 transition-transform hover:scale-[1.03] hover:shadow-md`}>
+              <div className="flex items-center gap-2" style={{ color }}>
+                <Icon size={18} />
+                <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
+              </div>
+              <span className="text-2xl font-bold" style={{ color }}>{value}</span>
+              <span className="text-xs text-muted-foreground">{unit}</span>
+            </div>
+          );
 
           return (
             <div className="space-y-6 animate-fade-in">
@@ -943,68 +965,33 @@ export default function Home() {
               ) : statsDrilldown === 'none' ? (
                 <>
                   {/* Main Donut: Payé vs Non Payé */}
-                  <div className="glass-panel p-8 rounded-lg flex flex-col lg:flex-row items-center justify-center gap-12">
+                  <div className="glass-panel p-8 rounded-2xl flex flex-col lg:flex-row items-center justify-center gap-10 lg:gap-16">
                     <div className="flex flex-col items-center">
                       <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-6">Répartition par Statut</h3>
-                      <div
-                        className="cursor-pointer hover:scale-105 transition-transform"
-                        onClick={() => setStatsDrilldown('paye')}
-                        title="Cliquez pour voir les détails"
-                      >
-                        <Donut
-                          segments={[
-                            { value: totalPayees, color: '#16a34a', label: 'Payées' },
-                            { value: nonPayees, color: '#dc2626', label: 'Non payées' },
-                          ]}
-                          centerValue={`${total}`}
-                          centerLabel="Mémoires"
-                          centerColor="#256a54"
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-4 flex items-center gap-1">
-                        <ChevronLeft size={14} className="rotate-90" />
-                        Cliquez sur le cercle pour les détails
+                      <Donut
+                        segments={[
+                          { value: totalPayees, color: '#16a34a', label: 'Payées', clickable: true, onClick: () => setStatsDrilldown('paye') },
+                          { value: nonPayees, color: '#dc2626', label: 'Non payées', clickable: true, onClick: () => setStatsDrilldown('nonpaye') },
+                        ]}
+                        centerValue={`${total}`}
+                        centerLabel="Mémoires"
+                        centerColor="#256a54"
+                      />
+                      <p className="text-xs text-muted-foreground mt-5 text-center">
+                        Cliquez sur une portion du cercle pour les détails
                       </p>
                     </div>
 
                     {/* Summary cards */}
-                    <div className="grid grid-cols-2 gap-4 w-full lg:w-auto">
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-5 flex flex-col gap-1">
-                        <div className="flex items-center gap-2 text-green-700">
-                          <TrendingUp size={18} />
-                          <span className="text-xs font-semibold uppercase">Total Versé</span>
-                        </div>
-                        <span className="text-2xl font-bold text-green-700">{totalVerse.toFixed(3)}</span>
-                        <span className="text-xs text-muted-foreground">DT</span>
-                      </div>
-                      <div className="bg-red-50 border border-red-200 rounded-lg p-5 flex flex-col gap-1">
-                        <div className="flex items-center gap-2 text-red-600">
-                          <TrendingDown size={18} />
-                          <span className="text-xs font-semibold uppercase">Solde Restant</span>
-                        </div>
-                        <span className="text-2xl font-bold text-red-600">{totalSolde.toFixed(3)}</span>
-                        <span className="text-xs text-muted-foreground">DT</span>
-                      </div>
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-5 flex flex-col gap-1">
-                        <div className="flex items-center gap-2 text-blue-700">
-                          <FileText size={18} />
-                          <span className="text-xs font-semibold uppercase">Total Mémoires</span>
-                        </div>
-                        <span className="text-2xl font-bold text-blue-700">{totalMontant.toFixed(3)}</span>
-                        <span className="text-xs text-muted-foreground">DT</span>
-                      </div>
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-5 flex flex-col gap-1">
-                        <div className="flex items-center gap-2 text-amber-700">
-                          <Calculator size={18} />
-                          <span className="text-xs font-semibold uppercase">Nombre Total</span>
-                        </div>
-                        <span className="text-2xl font-bold text-amber-700">{total}</span>
-                        <span className="text-xs text-muted-foreground">mémoires</span>
-                      </div>
+                    <div className="grid grid-cols-2 gap-4 w-full lg:w-[420px]">
+                      <StatCard icon={TrendingUp} label="Total Versé" value={totalVerse.toFixed(3)} unit="DT" color="#16a34a" bg="bg-green-50" border="border-green-200" />
+                      <StatCard icon={TrendingDown} label="Solde Restant" value={totalSolde.toFixed(3)} unit="DT" color="#dc2626" bg="bg-red-50" border="border-red-200" />
+                      <StatCard icon={FileText} label="Total Mémoires" value={totalMontant.toFixed(3)} unit="DT" color="#2563eb" bg="bg-blue-50" border="border-blue-200" />
+                      <StatCard icon={Calculator} label="Nombre Total" value={`${total}`} unit="mémoires" color="#d97706" bg="bg-amber-50" border="border-amber-200" />
                     </div>
                   </div>
                 </>
-              ) : (
+              ) : statsDrilldown === 'paye' ? (
                 /* Drill-down: payé details */
                 <div className="space-y-6 animate-fade-in">
                   <button
@@ -1015,7 +1002,7 @@ export default function Home() {
                     Retour
                   </button>
 
-                  <div className="glass-panel p-8 rounded-lg flex flex-col lg:flex-row items-center justify-center gap-12">
+                  <div className="glass-panel p-8 rounded-2xl flex flex-col lg:flex-row items-center justify-center gap-10 lg:gap-16">
                     <div className="flex flex-col items-center">
                       <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-6">Détail des Mémoires Payées</h3>
                       <Donut
@@ -1029,32 +1016,16 @@ export default function Home() {
                       />
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full lg:w-auto">
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-5 flex flex-col gap-1">
-                        <span className="text-xs font-semibold uppercase text-green-700">Payées en Total</span>
-                        <span className="text-3xl font-bold text-green-700">{payees}</span>
-                        <span className="text-xs text-muted-foreground">mémoires</span>
-                      </div>
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-5 flex flex-col gap-1">
-                        <span className="text-xs font-semibold uppercase text-amber-700">Partiellement Payées</span>
-                        <span className="text-3xl font-bold text-amber-700">{partielles}</span>
-                        <span className="text-xs text-muted-foreground">mémoires</span>
-                      </div>
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-5 flex flex-col gap-1">
-                        <span className="text-xs font-semibold uppercase text-green-700">Montant Versé</span>
-                        <span className="text-2xl font-bold text-green-700">{totalVerse.toFixed(3)}</span>
-                        <span className="text-xs text-muted-foreground">DT</span>
-                      </div>
-                      <div className="bg-red-50 border border-red-200 rounded-lg p-5 flex flex-col gap-1">
-                        <span className="text-xs font-semibold uppercase text-red-600">Solde Restant</span>
-                        <span className="text-2xl font-bold text-red-600">{totalSolde.toFixed(3)}</span>
-                        <span className="text-xs text-muted-foreground">DT</span>
-                      </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full lg:w-[420px]">
+                      <StatCard icon={CheckCircle} label="Payées en Total" value={`${payees}`} unit="mémoires" color="#16a34a" bg="bg-green-50" border="border-green-200" />
+                      <StatCard icon={Wallet} label="Partiellement Payées" value={`${partielles}`} unit="mémoires" color="#d97706" bg="bg-amber-50" border="border-amber-200" />
+                      <StatCard icon={TrendingUp} label="Montant Versé" value={totalVerse.toFixed(3)} unit="DT" color="#16a34a" bg="bg-green-50" border="border-green-200" />
+                      <StatCard icon={TrendingDown} label="Solde Restant" value={totalSolde.toFixed(3)} unit="DT" color="#dc2626" bg="bg-red-50" border="border-red-200" />
                     </div>
                   </div>
 
                   {/* Detailed table */}
-                  <div className="glass-panel rounded-lg overflow-hidden">
+                  <div className="glass-panel rounded-2xl overflow-hidden">
                     <div className="p-4 bg-gray-50 border-b border-border">
                       <h3 className="font-bold text-secondary text-lg">Détail des Chiffres par Mémoire</h3>
                     </div>
@@ -1089,6 +1060,77 @@ export default function Home() {
                               </tr>
                             );
                           })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Drill-down: non-payé details */
+                <div className="space-y-6 animate-fade-in">
+                  <button
+                    onClick={() => setStatsDrilldown('none')}
+                    className="flex items-center gap-1 text-sm font-medium text-secondary hover:text-primary transition-colors cursor-pointer"
+                  >
+                    <ChevronLeft size={18} />
+                    Retour
+                  </button>
+
+                  <div className="glass-panel p-8 rounded-2xl flex flex-col lg:flex-row items-center justify-center gap-10 lg:gap-16">
+                    <div className="flex flex-col items-center">
+                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-6">Détail des Mémoires Non Payées</h3>
+                      <Donut
+                        segments={[
+                          { value: nonPayees, color: '#dc2626', label: 'Non payées' },
+                        ]}
+                        centerValue={`${nonPayees}`}
+                        centerLabel="Non payées"
+                        centerColor="#dc2626"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full lg:w-[420px]">
+                      <StatCard icon={FileText} label="Mémoires Non Payées" value={`${nonPayees}`} unit="mémoires" color="#dc2626" bg="bg-red-50" border="border-red-200" />
+                      <StatCard icon={TrendingDown} label="Montant Non Réglé" value={nonPayeeMontant.toFixed(3)} unit="DT" color="#dc2626" bg="bg-red-50" border="border-red-200" />
+                      <StatCard icon={Calculator} label="Total Mémoires" value={`${total}`} unit="mémoires" color="#d97706" bg="bg-amber-50" border="border-amber-200" />
+                      <StatCard icon={TrendingUp} label="Total Versé" value={totalVerse.toFixed(3)} unit="DT" color="#16a34a" bg="bg-green-50" border="border-green-200" />
+                    </div>
+                  </div>
+
+                  {/* Detailed table */}
+                  <div className="glass-panel rounded-2xl overflow-hidden">
+                    <div className="p-4 bg-gray-50 border-b border-border">
+                      <h3 className="font-bold text-secondary text-lg">Détail des Mémoires Non Payées</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm text-left">
+                        <thead className="table-header text-xs uppercase bg-secondary text-primary-foreground">
+                          <tr>
+                            <th className="px-6 py-3 rounded-tl-lg">Client</th>
+                            <th className="px-6 py-3">Date</th>
+                            <th className="px-6 py-3">Total (DT)</th>
+                            <th className="px-6 py-3 rounded-tr-lg">Statut</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {nonPayeeList.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="px-6 py-8 text-center text-muted-foreground italic">
+                                Aucune mémoire non payée.
+                              </td>
+                            </tr>
+                          ) : nonPayeeList.map((m) => (
+                            <tr key={m.id} className="bg-white border-b hover:bg-gray-50/50 transition-colors">
+                              <td className="px-6 py-4 font-medium">{m.client}</td>
+                              <td className="px-6 py-4">{format(new Date(m.date_memoire), 'dd/MM/yyyy')}</td>
+                              <td className="px-6 py-4 font-bold text-secondary">{Number(m.total_prime).toFixed(3)}</td>
+                              <td className="px-6 py-4">
+                                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800">
+                                  {m.statut}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
                         </tbody>
                       </table>
                     </div>
