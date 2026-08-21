@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { FileText, Save, List, CheckCircle, Trash2, PlusCircle, LayoutDashboard, Calculator, Percent, History, LogOut, User } from 'lucide-react';
+import { FileText, Save, List, CircleCheck as CheckCircle, Trash2, CirclePlus as PlusCircle, LayoutDashboard, Calculator, Wallet, History, X, ChartPie as PieChart, TrendingUp, TrendingDown, ChevronLeft } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 function numberToFrench(num: number): string {
@@ -86,12 +86,19 @@ interface MemoireDB {
   details?: MemoireLine[];
   pdf_url?: string;
   titre?: string;
-  solde_non_regle?: number | null;
-  historique_paiements?: { date: string; montant: number }[] | null;
+}
+
+interface Paiement {
+  id: string;
+  memoire_id: string;
+  montant: number;
+  date_paiement: string;
+  note?: string | null;
+  created_at?: string;
 }
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'create' | 'view'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'view' | 'stats'>('create');
   const [memoireTitre, setMemoireTitre] = useState('');
 
   // Form State
@@ -112,17 +119,24 @@ export default function Home() {
   const [fetching, setFetching] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
 
-  // Partial payment and history modal states
-  const [partialPayMemoire, setPartialPayMemoire] = useState<MemoireDB | null>(null);
-  const [partialAmount, setPartialAmount] = useState<string>('');
-  const [partialDate, setPartialDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [historyViewMemoire, setHistoryViewMemoire] = useState<MemoireDB | null>(null);
+  // Partial Payment Modal State
+  const [partialModal, setPartialModal] = useState<{ memoireId: string; client: string; total: number; paid: number } | null>(null);
+  const [partialMontant, setPartialMontant] = useState('');
+  const [partialDate, setPartialDate] = useState(new Date().toISOString().split('T')[0]);
+  const [partialNote, setPartialNote] = useState('');
+  const [savingPartial, setSavingPartial] = useState(false);
 
-  // Auth state
-  const [currentUser, setCurrentUser] = useState<string | null>(null);
-  const [loginUsername, setLoginUsername] = useState<string>('Ahlem');
-  const [loginPassword, setLoginPassword] = useState<string>('');
-  const [isMounted, setIsMounted] = useState(false);
+  // Payment History Modal State
+  const [historyModal, setHistoryModal] = useState<{ memoireId: string; client: string } | null>(null);
+  const [historyPaiements, setHistoryPaiements] = useState<Paiement[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyDeletingId, setHistoryDeletingId] = useState<string | null>(null);
+
+  // Per-mémoire paid amounts (memoireId -> total paid)
+  const [paidMap, setPaidMap] = useState<Record<string, number>>({});
+
+  // Stats drill-down state
+  const [statsDrilldown, setStatsDrilldown] = useState<'none' | 'paye'>('none');
 
   const branches: Branche[] = ['Automobile', 'MRH', 'MRP', 'MRE', 'MRA', 'Santé', 'Vie', 'Incendie', 'Ristourne'];
 
@@ -300,9 +314,7 @@ export default function Home() {
         total_prime: totalPrimes,
         statut: 'Non payée',
         date_paiement: null,
-        pdf_url: pdfUrl,
-        solde_non_regle: totalPrimes,
-        historique_paiements: []
+        pdf_url: pdfUrl
       };
 
       const { error } = await supabase.from('memoires').insert([memoireToSave]);
@@ -334,6 +346,21 @@ export default function Home() {
 
       if (error) throw error;
       setMemoires(data || []);
+
+      // Fetch all paiements to compute paid amounts per memoire
+      const { data: allPaiements, error: pErr } = await supabase
+        .from('paiements')
+        .select('memoire_id, montant');
+
+      if (!pErr && allPaiements) {
+        const map: Record<string, number> = {};
+        for (const p of allPaiements) {
+          map[p.memoire_id] = (map[p.memoire_id] || 0) + Number(p.montant);
+        }
+        setPaidMap(map);
+      } else {
+        setPaidMap({});
+      }
     } catch (error: any) {
       showToast('Erreur chargement: ' + error?.message, 'error');
     } finally {
@@ -344,240 +371,157 @@ export default function Home() {
   const markAsPaid = async (id: string) => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const memoire = memoires.find(m => m.id === id);
-      if (!memoire) throw new Error('Mémoire introuvable');
-
-      const currentUnpaid = memoire.solde_non_regle !== undefined && memoire.solde_non_regle !== null
-        ? memoire.solde_non_regle
-        : (memoire.statut === 'Payée' ? 0 : memoire.total_prime);
-
-      if (currentUnpaid <= 0) {
-        showToast('Cette mémoire est déjà entièrement payée', 'error');
-        return;
-      }
-
-      const newPayment = { date: today, montant: currentUnpaid };
-      const currentHistory = memoire.historique_paiements || (memoire.statut === 'Payée' && memoire.date_paiement ? [{ date: memoire.date_paiement, montant: memoire.total_prime }] : []);
-      const newHistory = [...currentHistory, newPayment];
-
       const { error } = await supabase
         .from('memoires')
-        .update({ 
-          statut: 'Payée', 
-          date_paiement: today,
-          solde_non_regle: 0,
-          historique_paiements: newHistory
-        })
+        .update({ statut: 'Payée', date_paiement: today })
         .eq('id', id);
 
       if (error) throw error;
 
       showToast('Mémoire marquée comme payée', 'success');
-      // Update UI immediately
-      setMemoires(memoires.map(m => m.id === id ? { 
-        ...m, 
-        statut: 'Payée', 
-        date_paiement: today,
-        solde_non_regle: 0,
-        historique_paiements: newHistory
-      } : m));
+      setMemoires(memoires.map(m => m.id === id ? { ...m, statut: 'Payée', date_paiement: today } : m));
     } catch (error: any) {
       showToast('Erreur mise à jour: ' + error?.message, 'error');
     }
   };
 
-  const handlePartialLiquidation = async (id: string, amount: number, date: string) => {
-    setLoading(true);
+  const openPartialModal = (m: MemoireDB) => {
+    const paid = paidMap[m.id] || 0;
+    setPartialModal({ memoireId: m.id, client: m.client, total: Number(m.total_prime), paid });
+    setPartialMontant('');
+    setPartialDate(new Date().toISOString().split('T')[0]);
+    setPartialNote('');
+  };
+
+  const closePartialModal = () => {
+    setPartialModal(null);
+    setPartialMontant('');
+    setPartialNote('');
+  };
+
+  const savePartialPayment = async () => {
+    if (!partialModal) return;
+    const montant = parseFloat(partialMontant);
+    if (isNaN(montant) || montant <= 0) {
+      showToast('Veuillez saisir un montant valide', 'error');
+      return;
+    }
+    if (!partialDate) {
+      showToast('Veuillez saisir une date de paiement', 'error');
+      return;
+    }
+
+    const remaining = partialModal.total - partialModal.paid;
+    if (montant > remaining + 0.001) {
+      showToast(`Le montant dépasse le solde restant (${remaining.toFixed(3)} DT)`, 'error');
+      return;
+    }
+
+    setSavingPartial(true);
     try {
-      const memoire = memoires.find(m => m.id === id);
-      if (!memoire) throw new Error('Mémoire introuvable');
+      const { error } = await supabase.from('paiements').insert([{
+        memoire_id: partialModal.memoireId,
+        montant,
+        date_paiement: partialDate,
+        note: partialNote.trim() || null
+      }]);
 
-      const currentUnpaid = memoire.solde_non_regle !== undefined && memoire.solde_non_regle !== null
-        ? memoire.solde_non_regle
-        : (memoire.statut === 'Payée' ? 0 : memoire.total_prime);
-        
-      const newUnpaid = Math.max(0, currentUnpaid - amount);
-      const newStatus = newUnpaid === 0 ? 'Payée' : 'Partiellement payée';
-      
-      const newPayment = { date, montant: amount };
-      const currentHistory = memoire.historique_paiements || (memoire.statut === 'Payée' && memoire.date_paiement ? [{ date: memoire.date_paiement, montant: memoire.total_prime }] : []);
-      const newHistory = [...currentHistory, newPayment];
+      if (error) throw error;
 
-      const updatePayload: any = {
-        statut: newStatus,
-        solde_non_regle: newUnpaid,
-        historique_paiements: newHistory
-      };
+      const newPaid = partialModal.paid + montant;
+      const isFullyPaid = newPaid >= partialModal.total - 0.001;
 
-      if (newStatus === 'Payée') {
-        updatePayload.date_paiement = date;
+      // Update memoire status if fully paid
+      if (isFullyPaid) {
+        await supabase
+          .from('memoires')
+          .update({ statut: 'Payée', date_paiement: partialDate })
+          .eq('id', partialModal.memoireId);
+        setMemoires(prev => prev.map(m => m.id === partialModal.memoireId ? { ...m, statut: 'Payée', date_paiement: partialDate } : m));
+      } else {
+        setMemoires(prev => prev.map(m => m.id === partialModal.memoireId ? { ...m, statut: 'Partiellement payée', date_paiement: null } : m));
+        await supabase
+          .from('memoires')
+          .update({ statut: 'Partiellement payée', date_paiement: null })
+          .eq('id', partialModal.memoireId);
       }
 
-      const { error } = await supabase
-        .from('memoires')
-        .update(updatePayload)
-        .eq('id', id);
-
-      if (error) throw error;
-
-      showToast('Paiement partiel enregistré', 'success');
-      
-      // Update state locally
-      setMemoires(memoires.map(m => m.id === id ? { 
-        ...m, 
-        ...updatePayload 
-      } : m));
-      
-      setPartialPayMemoire(null);
+      setPaidMap(prev => ({ ...prev, [partialModal.memoireId]: newPaid }));
+      showToast(isFullyPaid ? 'Mémoire entièrement liquidée' : 'Paiement partiel enregistré', 'success');
+      closePartialModal();
     } catch (error: any) {
-      showToast('Erreur lors du paiement: ' + error?.message, 'error');
+      showToast('Erreur enregistrement paiement : ' + error?.message, 'error');
     } finally {
-      setLoading(false);
+      setSavingPartial(false);
     }
   };
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const users: Record<string, string> = {
-      'Ahlem': '123',
-      'Rouae': '987',
-      'Hamza': '007H'
-    };
-
-    if (users[loginUsername] === loginPassword) {
-      setCurrentUser(loginUsername);
-      localStorage.setItem('memoire_auth_user', loginUsername);
-      showToast(`Bienvenue, ${loginUsername} !`, 'success');
-      setLoginPassword('');
-    } else {
-      showToast('Mot de passe incorrect', 'error');
-    }
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem('memoire_auth_user');
-    showToast('Déconnexion réussie', 'success');
-  };
-
-  const deleteMemoire = async (id: string) => {
-    if (currentUser !== 'Hamza') {
-      showToast('Seul Hamza est autorisé à supprimer des mémoires', 'error');
-      return;
-    }
-
-    if (!confirm('Êtes-vous sûr de vouloir supprimer définitivement cette mémoire ?')) {
-      return;
-    }
-
-    setLoading(true);
+  const openHistoryModal = async (m: MemoireDB) => {
+    setHistoryModal({ memoireId: m.id, client: m.client });
+    setHistoryPaiements([]);
+    setHistoryLoading(true);
     try {
-      const { error } = await supabase
-        .from('memoires')
-        .delete()
-        .eq('id', id);
+      const { data, error } = await supabase
+        .from('paiements')
+        .select('*')
+        .eq('memoire_id', m.id)
+        .order('date_paiement', { ascending: false });
 
       if (error) throw error;
-
-      showToast('Mémoire supprimée avec succès', 'success');
-      setMemoires(memoires.filter(m => m.id !== id));
+      setHistoryPaiements((data || []) as Paiement[]);
     } catch (error: any) {
-      showToast('Erreur de suppression: ' + error?.message, 'error');
+      showToast('Erreur chargement historique : ' + error?.message, 'error');
     } finally {
-      setLoading(false);
+      setHistoryLoading(false);
+    }
+  };
+
+  const closeHistoryModal = () => {
+    setHistoryModal(null);
+    setHistoryPaiements([]);
+    setHistoryDeletingId(null);
+  };
+
+  const deletePaiement = async (paiementId: string, memoireId: string) => {
+    setHistoryDeletingId(paiementId);
+    try {
+      const { error } = await supabase.from('paiements').delete().eq('id', paiementId);
+      if (error) throw error;
+
+      // Refresh history list
+      setHistoryPaiements(prev => prev.filter(p => p.id !== paiementId));
+
+      // Recompute paid amount for this memoire
+      const removed = historyPaiements.find(p => p.id === paiementId);
+      if (removed) {
+        const newPaid = (paidMap[memoireId] || 0) - Number(removed.montant);
+        setPaidMap(prev => ({ ...prev, [memoireId]: Math.max(0, newPaid) }));
+
+        // Update memoire status
+        const memoire = memoires.find(m => m.id === memoireId);
+        if (memoire) {
+          if (newPaid <= 0.001) {
+            await supabase.from('memoires').update({ statut: 'Non payée', date_paiement: null }).eq('id', memoireId);
+            setMemoires(prev => prev.map(m => m.id === memoireId ? { ...m, statut: 'Non payée', date_paiement: null } : m));
+          } else {
+            await supabase.from('memoires').update({ statut: 'Partiellement payée', date_paiement: null }).eq('id', memoireId);
+            setMemoires(prev => prev.map(m => m.id === memoireId ? { ...m, statut: 'Partiellement payée', date_paiement: null } : m));
+          }
+        }
+      }
+      showToast('Paiement supprimé', 'success');
+    } catch (error: any) {
+      showToast('Erreur suppression : ' + error?.message, 'error');
+    } finally {
+      setHistoryDeletingId(null);
     }
   };
 
   useEffect(() => {
-    setIsMounted(true);
-    const savedUser = localStorage.getItem('memoire_auth_user');
-    if (savedUser) {
-      setCurrentUser(savedUser);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeTab === 'view' && currentUser) {
+    if (activeTab === 'view' || activeTab === 'stats') {
       fetchMemoires();
     }
-  }, [activeTab, currentUser]);
-
-  if (!isMounted) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 text-foreground">
-        <div className="text-secondary font-bold text-lg animate-pulse">Chargement de la session...</div>
-      </div>
-    );
-  }
-
-  if (!currentUser) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4 relative overflow-hidden text-foreground">
-        {/* Decorative background shapes */}
-        <div className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] rounded-full bg-[#A1C936]/10 blur-3xl pointer-events-none"></div>
-        <div className="absolute bottom-[-20%] right-[-10%] w-[600px] h-[600px] rounded-full bg-[#256A54]/10 blur-3xl pointer-events-none"></div>
-        
-        {toast && (
-          <div className={`fixed top-4 right-4 z-50 px-6 py-3 rounded-md shadow-lg text-white animate-fade-in flex items-center gap-2 ${toast.type === 'success' ? 'bg-primary' : 'bg-destructive'}`}>
-            {toast.type === 'success' ? <CheckCircle size={20} /> : <div className="font-bold">!</div>}
-            {toast.message}
-          </div>
-        )}
-
-        <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-border overflow-hidden animate-fade-in relative z-10">
-          <div className="p-8 bg-[#256A54] text-white text-center relative">
-            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(161,201,54,0.15),transparent)] pointer-events-none"></div>
-            <img src="/logo.png" alt="STAR Assurances" className="h-16 mx-auto object-contain mb-4 bg-white/10 p-2 rounded-lg" onError={(e) => { e.currentTarget.style.display = 'none' }} />
-            <h2 className="text-2xl font-bold">STAR Assurances</h2>
-            <p className="text-white/80 text-sm mt-1">Gestion des Mémoires de Règlement</p>
-          </div>
-          
-          <form onSubmit={handleLogin} className="p-8 space-y-6">
-            <h3 className="text-xl font-semibold text-secondary text-center mb-2">Authentification</h3>
-            
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-gray-700">Utilisateur <span className="text-destructive">*</span></label>
-              <select
-                className="input-field cursor-pointer bg-white"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                required
-              >
-                <option value="Ahlem">Ahlem</option>
-                <option value="Rouae">Rouae</option>
-                <option value="Hamza">Hamza</option>
-              </select>
-            </div>
-            
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-gray-700">Mot de passe <span className="text-destructive">*</span></label>
-              <input
-                type="password"
-                className="input-field"
-                placeholder="Entrez votre mot de passe"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                required
-                autoFocus
-              />
-            </div>
-            
-            <button
-              type="submit"
-              className="btn-primary w-full py-3 mt-4 text-base font-semibold transition-all hover:scale-[1.01] cursor-pointer"
-            >
-              <User size={18} />
-              Se connecter
-            </button>
-          </form>
-          
-          <div className="p-4 bg-gray-50 border-t border-border text-center text-xs text-muted-foreground">
-            Agence SHIRI FARES HAMZA — MATEUR
-          </div>
-        </div>
-      </div>
-    );
-  }
+  }, [activeTab]);
 
   return (
     <div className="min-h-screen flex flex-col items-center">
@@ -590,63 +534,37 @@ export default function Home() {
       )}
 
       {/* Header App */}
-      <header className="w-full bg-white border-b border-border py-4 px-6 md:px-12 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm sticky top-0 z-40">
-        <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-start">
-          <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="STAR Assurances" className="h-12 object-contain hidden sm:block" onError={(e) => { e.currentTarget.style.display = 'none' }} />
-            <h1 className="text-2xl font-bold text-secondary flex items-center gap-2">
-              <Calculator className="text-primary h-7 w-7" />
-              Mémoires de Règlement
-            </h1>
-          </div>
-          {/* Mobile User Info & Logout */}
-          <div className="flex items-center gap-2 md:hidden">
-            <span className="bg-secondary/10 text-secondary text-xs px-2.5 py-1 rounded-full font-bold flex items-center gap-1 border border-secondary/20">
-              <User size={12} />
-              {currentUser}
-            </span>
-            <button
-              onClick={handleLogout}
-              className="text-red-500 hover:text-red-700 p-1.5 rounded-full hover:bg-red-50 transition-colors"
-              title="Déconnexion"
-            >
-              <LogOut size={16} />
-            </button>
-          </div>
+      <header className="w-full bg-white border-b border-border py-4 px-6 md:px-12 flex items-center justify-between shadow-sm sticky top-0 z-40">
+        <div className="flex items-center gap-4">
+          <img src="/logo.png" alt="STAR Assurances" className="h-12 object-contain hidden sm:block" onError={(e) => { e.currentTarget.style.display = 'none' }} />
+          <h1 className="text-2xl font-bold text-secondary flex items-center gap-2">
+            <Calculator className="text-primary h-7 w-7" />
+            Mémoires de Règlement
+          </h1>
         </div>
 
-        <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
-          <div className="flex gap-2">
-            <button
-              onClick={() => setActiveTab('create')}
-              className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'create' ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-muted'}`}
-            >
-              <PlusCircle size={18} />
-              <span>Créer</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('view')}
-              className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'view' ? 'bg-secondary text-secondary-foreground' : 'text-foreground hover:bg-muted'}`}
-            >
-              <List size={18} />
-              <span>Liste</span>
-            </button>
-          </div>
-          
-          {/* Desktop User Info & Logout */}
-          <div className="hidden md:flex items-center gap-3 border-l border-border pl-4">
-            <span className="bg-secondary/10 text-secondary text-sm px-3 py-1.5 rounded-full font-bold flex items-center gap-1.5 border border-secondary/20">
-              <User size={14} className="text-primary" />
-              {currentUser}
-            </span>
-            <button
-              onClick={handleLogout}
-              className="text-gray-500 hover:text-red-600 hover:bg-red-50 p-2 rounded-full transition-colors cursor-pointer"
-              title="Déconnexion"
-            >
-              <LogOut size={18} />
-            </button>
-          </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setActiveTab('create')}
+            className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'create' ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-muted'}`}
+          >
+            <PlusCircle size={18} />
+            <span className="hidden sm:inline">Créer</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('view')}
+            className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'view' ? 'bg-secondary text-secondary-foreground' : 'text-foreground hover:bg-muted'}`}
+          >
+            <List size={18} />
+            <span className="hidden sm:inline">Liste</span>
+          </button>
+          <button
+            onClick={() => { setActiveTab('stats'); setStatsDrilldown('none'); }}
+            className={`px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 ${activeTab === 'stats' ? 'bg-secondary text-secondary-foreground' : 'text-foreground hover:bg-muted'}`}
+          >
+            <PieChart size={18} />
+            <span className="hidden sm:inline">Statistiques</span>
+          </button>
         </div>
       </header>
 
@@ -864,30 +782,29 @@ export default function Home() {
                       <th className="px-6 py-3">Client Principal</th>
                       <th className="px-6 py-3">Date de Mémoire</th>
                       <th className="px-6 py-3">Total (DT)</th>
-                      <th className="px-6 py-3">Solde Restant (DT)</th>
+                      <th className="px-6 py-3">Versé (DT)</th>
+                      <th className="px-6 py-3">Solde (DT)</th>
                       <th className="px-6 py-3">Statut</th>
-                      <th className="px-6 py-3">Date de Paiement</th>
-                      <th className="px-6 py-3 rounded-tr-lg text-center">Action</th>
+                      <th className="px-6 py-3 rounded-tr-lg text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {fetching ? (
                       <tr>
-                        <td colSpan={7} className="px-6 py-8 text-center text-muted-foreground">
+                        <td colSpan={9} className="px-6 py-8 text-center text-muted-foreground">
                           Chargement des données...
                         </td>
                       </tr>
                     ) : memoires.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-6 py-8 text-center text-muted-foreground italic">
+                        <td colSpan={9} className="px-6 py-8 text-center text-muted-foreground italic">
                           Aucune mémoire enregistrée.
                         </td>
                       </tr>
                     ) : (
                       memoires.map((m) => {
-                        const unpaidBalance = m.solde_non_regle !== undefined && m.solde_non_regle !== null
-                          ? m.solde_non_regle
-                          : (m.statut === 'Payée' ? 0 : m.total_prime);
+                        const paid = paidMap[m.id] || 0;
+                        const solde = Number(m.total_prime) - paid;
                         return (
                           <tr key={m.id} className="bg-white border-b hover:bg-gray-50/50 transition-colors">
                             <td className="px-6 py-4 font-bold text-gray-700">{m.titre || 'MÉMOIRE DE RÈGLEMENT'}</td>
@@ -898,22 +815,18 @@ export default function Home() {
                             <td className="px-6 py-4 font-bold text-secondary">
                               {Number(m.total_prime).toFixed(3)}
                             </td>
-                            <td className="px-6 py-4 font-bold text-amber-600">
-                              {Number(unpaidBalance).toFixed(3)}
+                            <td className="px-6 py-4 font-medium text-green-700">
+                              {paid.toFixed(3)}
+                            </td>
+                            <td className="px-6 py-4 font-bold text-red-600">
+                              {solde.toFixed(3)}
                             </td>
                             <td className="px-6 py-4">
-                              <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                m.statut === 'Payée' ? 'bg-green-100 text-green-800' :
-                                m.statut === 'Partiellement payée' ? 'bg-blue-100 text-blue-800' :
-                                'bg-red-100 text-red-800'
-                              }`}>
+                              <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${m.statut === 'Payée' ? 'bg-green-100 text-green-800' : m.statut === 'Partiellement payée' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}`}>
                                 {m.statut}
                               </span>
                             </td>
-                            <td className="px-6 py-4 text-muted-foreground">
-                              {m.date_paiement ? format(new Date(m.date_paiement), 'dd/MM/yyyy') : '-'}
-                            </td>
-                            <td className="px-6 py-4 flex justify-center items-center gap-2 flex-wrap">
+                            <td className="px-6 py-4 flex justify-center gap-2 flex-wrap">
                               {m.pdf_url && (
                                 <a
                                   href={m.pdf_url}
@@ -927,49 +840,23 @@ export default function Home() {
                                 </a>
                               )}
                               {m.statut !== 'Payée' && (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      setPartialPayMemoire(m);
-                                      setPartialAmount('');
-                                      setPartialDate(new Date().toISOString().split('T')[0]);
-                                    }}
-                                    className="bg-amber-500 text-white hover:bg-amber-600 px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
-                                    title="Liquider Partiellement"
-                                  >
-                                    <Percent size={16} />
-                                    Partiel
-                                  </button>
-                                  <button
-                                    onClick={() => markAsPaid(m.id)}
-                                    className="bg-[#A1C936] text-white hover:bg-[#8cb52b] px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
-                                    title="Liquider entièrement"
-                                  >
-                                    <CheckCircle size={16} />
-                                    Liquider
-                                  </button>
-                                </>
+                                <button
+                                  onClick={() => openPartialModal(m)}
+                                  className="bg-[#A1C936] text-white hover:bg-[#8cb52b] px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
+                                  title="Liquider partiellement"
+                                >
+                                  <Wallet size={16} />
+                                  Liquider
+                                </button>
                               )}
                               <button
-                                onClick={() => setHistoryViewMemoire(m)}
-                                className="bg-sky-600 text-white hover:bg-sky-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
+                                onClick={() => openHistoryModal(m)}
+                                className="bg-blue-50 text-blue-700 hover:bg-blue-100 px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
                                 title="Historique des paiements"
                               >
                                 <History size={16} />
-                                Historique
+                                Détails
                               </button>
-                              
-                              {/* Only show delete button for Hamza */}
-                              {currentUser === 'Hamza' && (
-                                <button
-                                  onClick={() => deleteMemoire(m.id)}
-                                  className="bg-red-500 text-white hover:bg-red-600 px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
-                                  title="Supprimer la mémoire"
-                                >
-                                  <Trash2 size={16} />
-                                  Supprimer
-                                </button>
-                              )}
                             </td>
                           </tr>
                         );
@@ -981,42 +868,283 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        {/* Stats Tab */}
+        {activeTab === 'stats' && (() => {
+          const total = memoires.length;
+          const payees = memoires.filter(m => m.statut === 'Payée').length;
+          const partielles = memoires.filter(m => m.statut === 'Partiellement payée').length;
+          const nonPayees = memoires.filter(m => m.statut !== 'Payée' && m.statut !== 'Partiellement payée').length;
+          const totalPayees = payees + partielles;
+
+          const totalMontant = memoires.reduce((acc, m) => acc + Number(m.total_prime), 0);
+          const totalVerse = memoires.reduce((acc, m) => acc + (paidMap[m.id] || 0), 0);
+          const totalSolde = totalMontant - totalVerse;
+
+          const Donut = ({ segments, size = 200, strokeWidth = 28, centerLabel, centerValue, centerColor }: {
+            segments: { value: number; color: string; label: string }[];
+            size?: number; strokeWidth?: number; centerLabel: string; centerValue: string; centerColor: string;
+          }) => {
+            const radius = (size - strokeWidth) / 2;
+            const circumference = 2 * Math.PI * radius;
+            const totalSeg = segments.reduce((a, s) => a + s.value, 0) || 1;
+            let offset = 0;
+            return (
+              <div className="flex flex-col items-center">
+                <div className="relative" style={{ width: size, height: size }}>
+                  <svg width={size} height={size} className="-rotate-90">
+                    <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke="#f1f5f9" strokeWidth={strokeWidth} />
+                    {segments.map((seg, i) => {
+                      const len = (seg.value / totalSeg) * circumference;
+                      const el = (
+                        <circle
+                          key={i}
+                          cx={size/2} cy={size/2} r={radius} fill="none"
+                          stroke={seg.color} strokeWidth={strokeWidth}
+                          strokeDasharray={`${len} ${circumference - len}`}
+                          strokeDashoffset={-offset}
+                          strokeLinecap="round"
+                          style={{ transition: 'stroke-dasharray 0.6s ease, stroke-dashoffset 0.6s ease' }}
+                        />
+                      );
+                      offset += len;
+                      return el;
+                    })}
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="text-3xl font-bold" style={{ color: centerColor }}>{centerValue}</span>
+                    <span className="text-xs text-muted-foreground mt-1">{centerLabel}</span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-center gap-3 mt-4">
+                  {segments.map((s, i) => (
+                    <div key={i} className="flex items-center gap-1.5 text-sm">
+                      <span className="w-3 h-3 rounded-full" style={{ background: s.color }} />
+                      <span className="text-muted-foreground">{s.label}</span>
+                      <span className="font-bold">{s.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          };
+
+          return (
+            <div className="space-y-6 animate-fade-in">
+              <h2 className="text-xl font-bold text-secondary mb-4 flex items-center gap-2">
+                <PieChart className="text-primary" size={24} />
+                Statistiques des Mémoires
+              </h2>
+
+              {fetching ? (
+                <div className="glass-panel p-12 text-center text-muted-foreground">Chargement des statistiques...</div>
+              ) : total === 0 ? (
+                <div className="glass-panel p-12 text-center text-muted-foreground italic">Aucune mémoire enregistrée pour calculer les statistiques.</div>
+              ) : statsDrilldown === 'none' ? (
+                <>
+                  {/* Main Donut: Payé vs Non Payé */}
+                  <div className="glass-panel p-8 rounded-lg flex flex-col lg:flex-row items-center justify-center gap-12">
+                    <div className="flex flex-col items-center">
+                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-6">Répartition par Statut</h3>
+                      <div
+                        className="cursor-pointer hover:scale-105 transition-transform"
+                        onClick={() => setStatsDrilldown('paye')}
+                        title="Cliquez pour voir les détails"
+                      >
+                        <Donut
+                          segments={[
+                            { value: totalPayees, color: '#16a34a', label: 'Payées' },
+                            { value: nonPayees, color: '#dc2626', label: 'Non payées' },
+                          ]}
+                          centerValue={`${total}`}
+                          centerLabel="Mémoires"
+                          centerColor="#256a54"
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-4 flex items-center gap-1">
+                        <ChevronLeft size={14} className="rotate-90" />
+                        Cliquez sur le cercle pour les détails
+                      </p>
+                    </div>
+
+                    {/* Summary cards */}
+                    <div className="grid grid-cols-2 gap-4 w-full lg:w-auto">
+                      <div className="bg-green-50 border border-green-200 rounded-lg p-5 flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-green-700">
+                          <TrendingUp size={18} />
+                          <span className="text-xs font-semibold uppercase">Total Versé</span>
+                        </div>
+                        <span className="text-2xl font-bold text-green-700">{totalVerse.toFixed(3)}</span>
+                        <span className="text-xs text-muted-foreground">DT</span>
+                      </div>
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-5 flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-red-600">
+                          <TrendingDown size={18} />
+                          <span className="text-xs font-semibold uppercase">Solde Restant</span>
+                        </div>
+                        <span className="text-2xl font-bold text-red-600">{totalSolde.toFixed(3)}</span>
+                        <span className="text-xs text-muted-foreground">DT</span>
+                      </div>
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-5 flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-blue-700">
+                          <FileText size={18} />
+                          <span className="text-xs font-semibold uppercase">Total Mémoires</span>
+                        </div>
+                        <span className="text-2xl font-bold text-blue-700">{totalMontant.toFixed(3)}</span>
+                        <span className="text-xs text-muted-foreground">DT</span>
+                      </div>
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-5 flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-amber-700">
+                          <Calculator size={18} />
+                          <span className="text-xs font-semibold uppercase">Nombre Total</span>
+                        </div>
+                        <span className="text-2xl font-bold text-amber-700">{total}</span>
+                        <span className="text-xs text-muted-foreground">mémoires</span>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                /* Drill-down: payé details */
+                <div className="space-y-6 animate-fade-in">
+                  <button
+                    onClick={() => setStatsDrilldown('none')}
+                    className="flex items-center gap-1 text-sm font-medium text-secondary hover:text-primary transition-colors cursor-pointer"
+                  >
+                    <ChevronLeft size={18} />
+                    Retour
+                  </button>
+
+                  <div className="glass-panel p-8 rounded-lg flex flex-col lg:flex-row items-center justify-center gap-12">
+                    <div className="flex flex-col items-center">
+                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-6">Détail des Mémoires Payées</h3>
+                      <Donut
+                        segments={[
+                          { value: payees, color: '#16a34a', label: 'Payées en total' },
+                          { value: partielles, color: '#f59e0b', label: 'Payées partiellement' },
+                        ]}
+                        centerValue={`${totalPayees}`}
+                        centerLabel="Payées"
+                        centerColor="#16a34a"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full lg:w-auto">
+                      <div className="bg-green-50 border border-green-200 rounded-lg p-5 flex flex-col gap-1">
+                        <span className="text-xs font-semibold uppercase text-green-700">Payées en Total</span>
+                        <span className="text-3xl font-bold text-green-700">{payees}</span>
+                        <span className="text-xs text-muted-foreground">mémoires</span>
+                      </div>
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-5 flex flex-col gap-1">
+                        <span className="text-xs font-semibold uppercase text-amber-700">Partiellement Payées</span>
+                        <span className="text-3xl font-bold text-amber-700">{partielles}</span>
+                        <span className="text-xs text-muted-foreground">mémoires</span>
+                      </div>
+                      <div className="bg-green-50 border border-green-200 rounded-lg p-5 flex flex-col gap-1">
+                        <span className="text-xs font-semibold uppercase text-green-700">Montant Versé</span>
+                        <span className="text-2xl font-bold text-green-700">{totalVerse.toFixed(3)}</span>
+                        <span className="text-xs text-muted-foreground">DT</span>
+                      </div>
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-5 flex flex-col gap-1">
+                        <span className="text-xs font-semibold uppercase text-red-600">Solde Restant</span>
+                        <span className="text-2xl font-bold text-red-600">{totalSolde.toFixed(3)}</span>
+                        <span className="text-xs text-muted-foreground">DT</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Detailed table */}
+                  <div className="glass-panel rounded-lg overflow-hidden">
+                    <div className="p-4 bg-gray-50 border-b border-border">
+                      <h3 className="font-bold text-secondary text-lg">Détail des Chiffres par Mémoire</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm text-left">
+                        <thead className="table-header text-xs uppercase bg-secondary text-primary-foreground">
+                          <tr>
+                            <th className="px-6 py-3 rounded-tl-lg">Client</th>
+                            <th className="px-6 py-3">Date</th>
+                            <th className="px-6 py-3">Total (DT)</th>
+                            <th className="px-6 py-3">Versé (DT)</th>
+                            <th className="px-6 py-3">Solde (DT)</th>
+                            <th className="px-6 py-3 rounded-tr-lg">Statut</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {memoires.filter(m => m.statut === 'Payée' || m.statut === 'Partiellement payée').map((m) => {
+                            const paid = paidMap[m.id] || 0;
+                            const solde = Number(m.total_prime) - paid;
+                            return (
+                              <tr key={m.id} className="bg-white border-b hover:bg-gray-50/50 transition-colors">
+                                <td className="px-6 py-4 font-medium">{m.client}</td>
+                                <td className="px-6 py-4">{format(new Date(m.date_memoire), 'dd/MM/yyyy')}</td>
+                                <td className="px-6 py-4 font-bold text-secondary">{Number(m.total_prime).toFixed(3)}</td>
+                                <td className="px-6 py-4 font-medium text-green-700">{paid.toFixed(3)}</td>
+                                <td className="px-6 py-4 font-bold text-red-600">{solde.toFixed(3)}</td>
+                                <td className="px-6 py-4">
+                                  <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${m.statut === 'Payée' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
+                                    {m.statut}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </main>
 
-      {/* Modal Liquider Partiellement */}
-      {partialPayMemoire && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden border border-border text-foreground">
-            <div className="p-6 border-b border-border bg-gray-50">
-              <h3 className="text-lg font-bold text-secondary">Liquider Partiellement</h3>
-              <p className="text-xs text-muted-foreground mt-1">
-                Client: {partialPayMemoire.client} | Reste à régler: {Number(partialPayMemoire.solde_non_regle !== undefined && partialPayMemoire.solde_non_regle !== null ? partialPayMemoire.solde_non_regle : (partialPayMemoire.statut === 'Payée' ? 0 : partialPayMemoire.total_prime)).toFixed(3)} DT
-              </p>
+      {/* Partial Payment Modal */}
+      {partialModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 relative">
+            <button
+              onClick={closePartialModal}
+              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground p-1 rounded-full hover:bg-muted cursor-pointer"
+            >
+              <X size={20} />
+            </button>
+            <h3 className="text-lg font-bold text-secondary mb-1 flex items-center gap-2">
+              <Wallet className="text-primary" size={20} />
+              Liquidation partielle
+            </h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Client : <span className="font-medium text-foreground">{partialModal.client}</span>
+            </p>
+
+            <div className="bg-muted rounded-md p-3 mb-4 text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total mémoire :</span>
+                <span className="font-bold text-secondary">{partialModal.total.toFixed(3)} DT</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Déjà versé :</span>
+                <span className="font-bold text-green-700">{partialModal.paid.toFixed(3)} DT</span>
+              </div>
+              <div className="flex justify-between border-t border-border pt-1 mt-1">
+                <span className="text-muted-foreground">Solde restant :</span>
+                <span className="font-bold text-red-600">{(partialModal.total - partialModal.paid).toFixed(3)} DT</span>
+              </div>
             </div>
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              const amt = parseFloat(partialAmount);
-              if (isNaN(amt) || amt <= 0) {
-                showToast('Veuillez entrer un montant valide', 'error');
-                return;
-              }
-              const currentUnpaid = partialPayMemoire.solde_non_regle !== undefined && partialPayMemoire.solde_non_regle !== null ? partialPayMemoire.solde_non_regle : (partialPayMemoire.statut === 'Payée' ? 0 : partialPayMemoire.total_prime);
-              if (amt > currentUnpaid) {
-                showToast('Le montant ne peut pas dépasser le solde restant', 'error');
-                return;
-              }
-              handlePartialLiquidation(partialPayMemoire.id, amt, partialDate);
-            }} className="p-6 space-y-4">
+
+            <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium mb-1">Montant à liquider (DT) <span className="text-destructive">*</span></label>
                 <input
                   type="number"
                   step="0.001"
                   min="0.001"
-                  max={Number(partialPayMemoire.solde_non_regle !== undefined && partialPayMemoire.solde_non_regle !== null ? partialPayMemoire.solde_non_regle : (partialPayMemoire.statut === 'Payée' ? 0 : partialPayMemoire.total_prime)).toFixed(3)}
-                  className="input-field font-semibold text-lg text-secondary"
-                  value={partialAmount}
-                  onChange={(e) => setPartialAmount(e.target.value)}
+                  max={(partialModal.total - partialModal.paid).toFixed(3)}
+                  className="input-field"
+                  placeholder="0.000"
+                  value={partialMontant}
+                  onChange={(e) => setPartialMontant(e.target.value)}
                   required
                   autoFocus
                 />
@@ -1025,116 +1153,119 @@ export default function Home() {
                 <label className="block text-sm font-medium mb-1">Date de paiement <span className="text-destructive">*</span></label>
                 <input
                   type="date"
-                  className="input-field"
+                  className="input-field cursor-pointer"
                   value={partialDate}
                   onChange={(e) => setPartialDate(e.target.value)}
                   required
                 />
               </div>
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setPartialPayMemoire(null)}
-                  className="px-4 py-2 border border-border rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="btn-primary py-2 px-4 text-sm cursor-pointer"
-                >
-                  {loading ? 'Enregistrement...' : 'Enregistrer'}
-                </button>
+              <div>
+                <label className="block text-sm font-medium mb-1">Note <span className="text-muted-foreground">(Optionnel)</span></label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="Ex: Chèque n°12345"
+                  value={partialNote}
+                  onChange={(e) => setPartialNote(e.target.value)}
+                />
               </div>
-            </form>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={closePartialModal}
+                className="flex-1 px-4 py-2 rounded-md font-medium border border-border text-foreground hover:bg-muted transition-colors cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={savePartialPayment}
+                disabled={savingPartial}
+                className="flex-1 btn-primary"
+              >
+                <Save size={18} />
+                {savingPartial ? 'Enregistrement...' : 'Enregistrer'}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Modal Historique des Paiements */}
-      {historyViewMemoire && (() => {
-        const currentUnpaid = historyViewMemoire.solde_non_regle !== undefined && historyViewMemoire.solde_non_regle !== null ? historyViewMemoire.solde_non_regle : (historyViewMemoire.statut === 'Payée' ? 0 : historyViewMemoire.total_prime);
-        const total = Number(historyViewMemoire.total_prime);
-        const paidHistory = historyViewMemoire.historique_paiements || (historyViewMemoire.statut === 'Payée' && historyViewMemoire.date_paiement ? [{ date: historyViewMemoire.date_paiement, montant: total }] : []);
-        const totalPaid = paidHistory.reduce((acc, curr) => acc + Number(curr.montant), 0);
+      {/* Payment History Modal */}
+      {historyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 relative max-h-[85vh] overflow-y-auto">
+            <button
+              onClick={closeHistoryModal}
+              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground p-1 rounded-full hover:bg-muted cursor-pointer"
+            >
+              <X size={20} />
+            </button>
+            <h3 className="text-lg font-bold text-secondary mb-1 flex items-center gap-2">
+              <History className="text-primary" size={20} />
+              Historique des paiements
+            </h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Client : <span className="font-medium text-foreground">{historyModal.client}</span>
+            </p>
 
-        return (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-lg overflow-hidden border border-border text-foreground">
-              <div className="p-6 border-b border-border bg-gray-50 flex justify-between items-center">
-                <div>
-                  <h3 className="text-lg font-bold text-secondary">Historique des Paiements</h3>
-                  <p className="text-xs text-muted-foreground mt-1">Client: {historyViewMemoire.client}</p>
-                </div>
-                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                  historyViewMemoire.statut === 'Payée' ? 'bg-green-100 text-green-800' : 
-                  historyViewMemoire.statut === 'Partiellement payée' ? 'bg-blue-100 text-blue-800' : 
-                  'bg-red-100 text-red-800'
-                }`}>
-                  {historyViewMemoire.statut}
-                </span>
-              </div>
-              
-              <div className="p-6 space-y-4">
-                <div className="max-h-[250px] overflow-y-auto border border-border rounded-md">
+            {historyLoading ? (
+              <div className="py-8 text-center text-muted-foreground">Chargement...</div>
+            ) : historyPaiements.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground italic">Aucun paiement enregistré pour cette mémoire.</div>
+            ) : (
+              <>
+                <div className="overflow-x-auto rounded-md border border-border">
                   <table className="w-full text-sm text-left">
-                    <thead className="bg-gray-50 text-xs uppercase text-gray-700 border-b border-border">
+                    <thead className="table-header text-xs uppercase">
                       <tr>
-                        <th className="px-4 py-2 text-center">N°</th>
-                        <th className="px-4 py-2">Date de Paiement</th>
-                        <th className="px-4 py-2 text-right">Montant (DT)</th>
+                        <th className="px-4 py-2">Date</th>
+                        <th className="px-4 py-2">Montant (DT)</th>
+                        <th className="px-4 py-2">Note</th>
+                        <th className="px-4 py-2 text-center">Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {paidHistory.length === 0 ? (
-                        <tr>
-                          <td colSpan={3} className="px-4 py-6 text-center text-muted-foreground italic">
-                            Aucun paiement enregistré pour cette mémoire.
+                      {historyPaiements.map((p) => (
+                        <tr key={p.id} className="bg-white border-b hover:bg-gray-50/50 transition-colors">
+                          <td className="px-4 py-3">{format(new Date(p.date_paiement), 'dd/MM/yyyy')}</td>
+                          <td className="px-4 py-3 font-bold text-green-700">{Number(p.montant).toFixed(3)}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{p.note || '-'}</td>
+                          <td className="px-4 py-3 flex justify-center">
+                            <button
+                              onClick={() => deletePaiement(p.id, historyModal.memoireId)}
+                              disabled={historyDeletingId === p.id}
+                              className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded-full transition-colors cursor-pointer disabled:opacity-50"
+                              title="Supprimer ce paiement"
+                            >
+                              <Trash2 size={16} />
+                            </button>
                           </td>
                         </tr>
-                      ) : (
-                        paidHistory.map((p, index) => (
-                          <tr key={index} className="border-b border-border hover:bg-gray-50/50">
-                            <td className="px-4 py-2 text-center font-medium text-gray-500">{index + 1}</td>
-                            <td className="px-4 py-2">{format(new Date(p.date), 'dd/MM/yyyy')}</td>
-                            <td className="px-4 py-2 text-right font-bold text-secondary">{Number(p.montant).toFixed(3)} DT</td>
-                          </tr>
-                        ))
-                      )}
+                      ))}
                     </tbody>
                   </table>
                 </div>
-
-                <div className="bg-gray-50 p-4 rounded-md border border-border space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Total Mémoire :</span>
-                    <span className="font-semibold text-gray-700">{total.toFixed(3)} DT</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Total Réglé :</span>
-                    <span className="font-semibold text-green-600">{totalPaid.toFixed(3)} DT</span>
-                  </div>
-                  <div className="flex justify-between border-t border-border pt-2 text-base font-bold">
-                    <span className="text-secondary">Solde Restant :</span>
-                    <span className="text-amber-600">{currentUnpaid.toFixed(3)} DT</span>
-                  </div>
+                <div className="mt-4 flex justify-between bg-muted rounded-md p-3 text-sm">
+                  <span className="text-muted-foreground">Total versé :</span>
+                  <span className="font-bold text-green-700">
+                    {historyPaiements.reduce((acc, p) => acc + Number(p.montant), 0).toFixed(3)} DT
+                  </span>
                 </div>
+              </>
+            )}
 
-                <div className="flex justify-end pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setHistoryViewMemoire(null)}
-                    className="btn-secondary py-2 px-4 text-sm cursor-pointer"
-                  >
-                    Fermer
-                  </button>
-                </div>
-              </div>
+            <div className="flex justify-end mt-6">
+              <button
+                onClick={closeHistoryModal}
+                className="px-4 py-2 rounded-md font-medium border border-border text-foreground hover:bg-muted transition-colors cursor-pointer"
+              >
+                Fermer
+              </button>
             </div>
           </div>
-        );
-      })()}
+        </div>
+      )}
 
       {/* Required style for next/font/google or simple tailwind animations */}
       <style dangerouslySetInnerHTML={{
