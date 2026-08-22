@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { FileText, Save, List, CircleCheck as CheckCircle, Trash2, CirclePlus as PlusCircle, LayoutDashboard, Calculator, Wallet, History, X, ChartPie as PieChart, TrendingUp, TrendingDown, ChevronLeft } from 'lucide-react';
+import { FileText, Save, List, CircleCheck as CheckCircle, Trash2, CirclePlus as PlusCircle, LayoutDashboard, Calculator, Wallet, History, X, ChartPie as PieChart, TrendingUp, TrendingDown, ChevronLeft, Pencil, LogOut, UserRound } from 'lucide-react';
 import { format } from 'date-fns';
-import { fr } from 'date-fns/locale';
 function numberToFrench(num: number): string {
   const units = ['', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf'];
   const teens = ['dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'dix-sept', 'dix-huit', 'dix-neuf'];
@@ -97,9 +96,27 @@ interface Paiement {
   created_at?: string;
 }
 
+interface AppUser {
+  id: string;
+  username: string;
+  role: 'admin' | 'user';
+  display_name: string | null;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<'create' | 'view' | 'stats'>('create');
   const [memoireTitre, setMemoireTitre] = useState('');
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [editingMemoire, setEditingMemoire] = useState<MemoireDB | null>(null);
+  const [editTitre, setEditTitre] = useState('');
+  const [editClient, setEditClient] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editTotal, setEditTotal] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Form State
   const [branche, setBranche] = useState<Branche>('Automobile');
@@ -143,6 +160,122 @@ export default function Home() {
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  useEffect(() => {
+    const savedUser = window.localStorage.getItem('memoire_user');
+    if (savedUser) {
+      try {
+        setCurrentUser(JSON.parse(savedUser) as AppUser);
+      } catch {
+        window.localStorage.removeItem('memoire_user');
+      }
+    }
+    setAuthReady(true);
+  }, []);
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!loginUsername.trim() || !loginPassword) {
+      showToast('Veuillez saisir votre utilisateur et votre mot de passe', 'error');
+      return;
+    }
+
+    setLoginLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('verify_app_login', {
+        p_username: loginUsername.trim(),
+        p_password: loginPassword,
+      });
+      if (error || !data || data.length === 0) {
+        showToast('Utilisateur ou mot de passe incorrect', 'error');
+        return;
+      }
+
+      const user = data[0] as AppUser;
+      setCurrentUser(user);
+      window.localStorage.setItem('memoire_user', JSON.stringify(user));
+      setLoginUsername('');
+      setLoginPassword('');
+    } catch {
+      showToast('Connexion impossible. Veuillez réessayer.', 'error');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    window.localStorage.removeItem('memoire_user');
+    setActiveTab('create');
+  };
+
+  const openEditModal = (memoire: MemoireDB) => {
+    setEditingMemoire(memoire);
+    setEditTitre(memoire.titre || 'MÉMOIRE DE RÈGLEMENT');
+    setEditClient(memoire.client);
+    setEditDate(memoire.date_memoire);
+    setEditTotal(String(memoire.total_prime));
+  };
+
+  const closeEditModal = () => {
+    setEditingMemoire(null);
+    setEditTitre('');
+    setEditClient('');
+    setEditDate('');
+    setEditTotal('');
+  };
+
+  const saveMemoireEdit = async () => {
+    if (!editingMemoire || currentUser?.role !== 'admin') return;
+    const total = Number(editTotal);
+    if (!editClient.trim() || !editDate || !Number.isFinite(total)) {
+      showToast('Veuillez remplir les champs de la mémoire', 'error');
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      const { data, error } = await supabase
+        .from('memoires')
+        .update({
+          titre: editTitre.trim() || 'MÉMOIRE DE RÈGLEMENT',
+          client: editClient.trim(),
+          date_memoire: editDate,
+          total_prime: total,
+        })
+        .eq('id', editingMemoire.id)
+        .select()
+        .maybeSingle();
+
+      if (error || !data) throw new Error('update failed');
+      setMemoires(prev => prev.map(m => m.id === editingMemoire.id ? data as MemoireDB : m));
+      showToast('Mémoire modifiée avec succès', 'success');
+      closeEditModal();
+    } catch {
+      showToast('La modification de la mémoire a échoué', 'error');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const deleteMemoire = async (memoire: MemoireDB) => {
+    if (currentUser?.role !== 'admin') return;
+    if (!window.confirm(`Supprimer la mémoire de ${memoire.client} ?`)) return;
+
+    try {
+      const { error } = await supabase.from('memoires').delete().eq('id', memoire.id);
+      if (error) throw error;
+      setMemoires(prev => prev.filter(m => m.id !== memoire.id));
+      setPaidMap(prev => {
+        const next = { ...prev };
+        delete next[memoire.id];
+        return next;
+      });
+      showToast('Mémoire supprimée avec succès', 'success');
+    } catch {
+      showToast('La suppression de la mémoire a échoué', 'error');
+    }
   };
 
   const handleAddLine = (e: React.FormEvent) => {
@@ -523,6 +656,60 @@ export default function Home() {
     }
   }, [activeTab]);
 
+  if (!authReady) {
+    return <div className="min-h-screen bg-background" />;
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="w-full max-w-md glass-panel rounded-2xl p-8 animate-fade-in">
+          <div className="flex justify-center mb-6">
+            <img src="/logo.png" alt="STAR Assurances" className="h-16 object-contain" />
+          </div>
+          <div className="text-center mb-8">
+            <h1 className="text-2xl font-bold text-secondary">Mémoires de Règlement</h1>
+            <p className="text-muted-foreground mt-2">Connectez-vous pour accéder à votre espace</p>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div>
+              <label className="block text-sm font-medium mb-1">Utilisateur</label>
+              <input
+                type="text"
+                className="input-field"
+                value={loginUsername}
+                onChange={(event) => setLoginUsername(event.target.value)}
+                placeholder="Votre utilisateur"
+                autoComplete="username"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Mot de passe</label>
+              <input
+                type="password"
+                className="input-field"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                placeholder="Votre mot de passe"
+                autoComplete="current-password"
+                required
+              />
+            </div>
+            <button type="submit" disabled={loginLoading} className="btn-secondary w-full py-3">
+              {loginLoading ? 'Connexion...' : 'Se connecter'}
+            </button>
+          </form>
+          {toast && (
+            <div className="mt-5 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+              {toast.message}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col items-center">
       {/* Toast Notification */}
@@ -565,6 +752,19 @@ export default function Home() {
             <PieChart size={18} />
             <span className="hidden sm:inline">Statistiques</span>
           </button>
+          <div className="hidden md:flex items-center gap-2 border-l border-border pl-3 ml-1">
+            <UserRound size={18} className="text-secondary" />
+            <span className="text-sm font-medium text-secondary">{currentUser.display_name || currentUser.username}</span>
+            {currentUser.role === 'admin' && <span className="text-xs bg-primary/20 text-secondary px-2 py-1 rounded-full">Admin</span>}
+            <button
+              onClick={handleLogout}
+              className="p-2 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 transition-colors"
+              title="Se déconnecter"
+              aria-label="Se déconnecter"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -857,6 +1057,26 @@ export default function Home() {
                                 <History size={16} />
                                 Détails
                               </button>
+                              {currentUser.role === 'admin' && (
+                                <>
+                                  <button
+                                    onClick={() => openEditModal(m)}
+                                    className="bg-amber-50 text-amber-700 hover:bg-amber-100 px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Modifier la mémoire"
+                                  >
+                                    <Pencil size={16} />
+                                    Modifier
+                                  </button>
+                                  <button
+                                    onClick={() => deleteMemoire(m)}
+                                    className="bg-red-50 text-red-700 hover:bg-red-100 px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Supprimer la mémoire"
+                                  >
+                                    <Trash2 size={16} />
+                                    Supprimer
+                                  </button>
+                                </>
+                              )}
                             </td>
                           </tr>
                         );
@@ -1141,6 +1361,52 @@ export default function Home() {
           );
         })()}
       </main>
+
+      {/* Edit Memoire Modal */}
+      {editingMemoire && currentUser.role === 'admin' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 relative">
+            <button
+              onClick={closeEditModal}
+              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground p-1 rounded-full hover:bg-muted cursor-pointer"
+              aria-label="Fermer"
+            >
+              <X size={20} />
+            </button>
+            <h3 className="text-lg font-bold text-secondary mb-5 flex items-center gap-2">
+              <Pencil className="text-primary" size={20} />
+              Modifier la mémoire
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Titre</label>
+                <input className="input-field" value={editTitre} onChange={(event) => setEditTitre(event.target.value)} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Client</label>
+                <input className="input-field" value={editClient} onChange={(event) => setEditClient(event.target.value)} required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Date</label>
+                <input type="date" className="input-field" value={editDate} onChange={(event) => setEditDate(event.target.value)} required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Total (DT)</label>
+                <input type="number" step="0.001" className="input-field" value={editTotal} onChange={(event) => setEditTotal(event.target.value)} required />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={closeEditModal} className="flex-1 px-4 py-2 rounded-md font-medium border border-border text-foreground hover:bg-muted transition-colors cursor-pointer">
+                Annuler
+              </button>
+              <button onClick={saveMemoireEdit} disabled={savingEdit} className="flex-1 btn-primary">
+                <Save size={18} />
+                {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Partial Payment Modal */}
       {partialModal && (
