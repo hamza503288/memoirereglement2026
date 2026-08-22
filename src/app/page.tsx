@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { FileText, Save, List, CircleCheck as CheckCircle, Trash2, CirclePlus as PlusCircle, LayoutDashboard, Calculator, Wallet, History, X, ChartPie as PieChart, TrendingUp, TrendingDown, ChevronLeft, Pencil, LogIn, LogOut } from 'lucide-react';
+import { FileText, Save, List, CircleCheck as CheckCircle, Trash2, CirclePlus as PlusCircle, LayoutDashboard, Calculator, Wallet, History, X, ChartPie as PieChart, TrendingUp, TrendingDown, ChevronLeft } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 function numberToFrench(num: number): string {
@@ -137,24 +137,6 @@ export default function Home() {
 
   // Stats drill-down state
   const [statsDrilldown, setStatsDrilldown] = useState<'none' | 'paye' | 'nonpaye'>('none');
-
-  // Auth state
-  const [session, setSession] = useState<any>(null);
-  const [loginModalOpen, setLoginModalOpen] = useState(false);
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [loginError, setLoginError] = useState('');
-  const [loggingIn, setLoggingIn] = useState(false);
-
-  // Edit modal state
-  const [editModal, setEditModal] = useState<MemoireDB | null>(null);
-  const [editClient, setEditClient] = useState('');
-  const [editTitre, setEditTitre] = useState('');
-  const [editDate, setEditDate] = useState('');
-  const [editTotal, setEditTotal] = useState('');
-  const [savingEdit, setSavingEdit] = useState(false);
-
-  const isHamza = session?.user?.email === 'hamza@shiri.tn';
 
   const branches: Branche[] = ['Automobile', 'MRH', 'MRP', 'MRE', 'MRA', 'Santé', 'Vie', 'Incendie', 'Ristourne'];
 
@@ -535,99 +517,6 @@ export default function Home() {
     }
   };
 
-  const handleLogin = async () => {
-    setLoggingIn(true);
-    setLoginError('');
-    try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: loginEmail,
-        password: loginPassword,
-      });
-      if (error) throw error;
-      setLoginModalOpen(false);
-      setLoginEmail('');
-      setLoginPassword('');
-      showToast('Connexion réussie', 'success');
-    } catch (error: any) {
-      setLoginError(error?.message || 'Erreur de connexion');
-    } finally {
-      setLoggingIn(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    showToast('Déconnecté', 'success');
-  };
-
-  const openEditModal = (m: MemoireDB) => {
-    setEditModal(m);
-    setEditClient(m.client);
-    setEditTitre(m.titre || '');
-    setEditDate(m.date_memoire);
-    setEditTotal(Number(m.total_prime).toString());
-  };
-
-  const closeEditModal = () => {
-    setEditModal(null);
-  };
-
-  const saveEditMemoire = async () => {
-    if (!editModal) return;
-    if (!editClient.trim() || !editDate || !editTotal) {
-      showToast('Veuillez remplir les champs obligatoires', 'error');
-      return;
-    }
-    setSavingEdit(true);
-    try {
-      const { error } = await supabase
-        .from('memoires')
-        .update({
-          client: editClient.trim(),
-          titre: editTitre.trim() || 'MÉMOIRE DE RÈGLEMENT',
-          date_memoire: editDate,
-          total_prime: parseFloat(editTotal),
-        })
-        .eq('id', editModal.id);
-
-      if (error) throw error;
-
-      setMemoires(prev => prev.map(m => m.id === editModal.id ? {
-        ...m,
-        client: editClient.trim(),
-        titre: editTitre.trim() || 'MÉMOIRE DE RÈGLEMENT',
-        date_memoire: editDate,
-        total_prime: parseFloat(editTotal),
-      } : m));
-      showToast('Mémoire modifiée avec succès', 'success');
-      closeEditModal();
-    } catch (error: any) {
-      showToast('Erreur modification : ' + error?.message, 'error');
-    } finally {
-      setSavingEdit(false);
-    }
-  };
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-    }).catch(() => {
-      // ignore session errors — app works without login
-    });
-    let subscription: { unsubscribe: () => void } | null = null;
-    try {
-      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-        setSession(session);
-      });
-      subscription = data.subscription;
-    } catch {
-      // ignore
-    }
-    return () => {
-      try { subscription?.unsubscribe(); } catch { /* ignore */ }
-    };
-  }, []);
-
   useEffect(() => {
     if (activeTab === 'view' || activeTab === 'stats') {
       fetchMemoires();
@@ -676,25 +565,6 @@ export default function Home() {
             <PieChart size={18} />
             <span className="hidden sm:inline">Statistiques</span>
           </button>
-        </div>
-        <div className="flex items-center gap-2">
-          {isHamza ? (
-            <button
-              onClick={handleLogout}
-              className="px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 text-foreground hover:bg-muted cursor-pointer"
-            >
-              <LogOut size={18} />
-              <span className="hidden sm:inline">Déconnecter</span>
-            </button>
-          ) : (
-            <button
-              onClick={() => { setLoginModalOpen(true); setLoginError(''); }}
-              className="px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2 bg-secondary text-primary-foreground hover:opacity-90 cursor-pointer"
-            >
-              <LogIn size={18} />
-              <span className="hidden sm:inline">Connexion</span>
-            </button>
-          )}
         </div>
       </header>
 
@@ -987,16 +857,6 @@ export default function Home() {
                                 <History size={16} />
                                 Détails
                               </button>
-                              {isHamza && (
-                                <button
-                                  onClick={() => openEditModal(m)}
-                                  className="bg-amber-50 text-amber-700 hover:bg-amber-100 px-3 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
-                                  title="Modifier la mémoire"
-                                >
-                                  <Pencil size={16} />
-                                  Modifier
-                                </button>
-                              )}
                             </td>
                           </tr>
                         );
@@ -1443,151 +1303,6 @@ export default function Home() {
                 className="px-4 py-2 rounded-md font-medium border border-border text-foreground hover:bg-muted transition-colors cursor-pointer"
               >
                 Fermer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Memoire Modal */}
-      {editModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 relative">
-            <button
-              onClick={closeEditModal}
-              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground p-1 rounded-full hover:bg-muted cursor-pointer"
-            >
-              <X size={20} />
-            </button>
-            <h3 className="text-lg font-bold text-secondary mb-1 flex items-center gap-2">
-              <Pencil className="text-primary" size={20} />
-              Modifier la Mémoire
-            </h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Client : <span className="font-medium text-foreground">{editModal.client}</span>
-            </p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Client <span className="text-destructive">*</span></label>
-                <input
-                  type="text"
-                  className="input-field"
-                  value={editClient}
-                  onChange={(e) => setEditClient(e.target.value)}
-                  required
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Titre <span className="text-muted-foreground">(Optionnel)</span></label>
-                <input
-                  type="text"
-                  className="input-field font-semibold"
-                  placeholder="MÉMOIRE DE RÈGLEMENT"
-                  value={editTitre}
-                  onChange={(e) => setEditTitre(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Date de Mémoire <span className="text-destructive">*</span></label>
-                <input
-                  type="date"
-                  className="input-field cursor-pointer"
-                  value={editDate}
-                  onChange={(e) => setEditDate(e.target.value)}
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Total Prime (DT) <span className="text-destructive">*</span></label>
-                <input
-                  type="number"
-                  step="0.001"
-                  className="input-field"
-                  placeholder="0.000"
-                  value={editTotal}
-                  onChange={(e) => setEditTotal(e.target.value)}
-                  required
-                />
-              </div>
-            </div>
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={closeEditModal}
-                className="flex-1 px-4 py-2 rounded-md font-medium border border-border text-foreground hover:bg-muted transition-colors cursor-pointer"
-              >
-                Annuler
-              </button>
-              <button
-                onClick={saveEditMemoire}
-                disabled={savingEdit}
-                className="flex-1 btn-primary"
-              >
-                <Save size={18} />
-                {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Login Modal */}
-      {loginModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 relative">
-            <button
-              onClick={() => setLoginModalOpen(false)}
-              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground p-1 rounded-full hover:bg-muted cursor-pointer"
-            >
-              <X size={20} />
-            </button>
-            <h3 className="text-lg font-bold text-secondary mb-4 flex items-center gap-2">
-              <LogIn className="text-primary" size={20} />
-              Connexion
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Email</label>
-                <input
-                  type="email"
-                  className="input-field"
-                  placeholder="hamza@shiri.tn"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  required
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Mot de passe</label>
-                <input
-                  type="password"
-                  className="input-field"
-                  placeholder="••••••••"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  required
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(); }}
-                />
-              </div>
-              {loginError && (
-                <p className="text-sm text-destructive">{loginError}</p>
-              )}
-            </div>
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={() => setLoginModalOpen(false)}
-                className="flex-1 px-4 py-2 rounded-md font-medium border border-border text-foreground hover:bg-muted transition-colors cursor-pointer"
-              >
-                Annuler
-              </button>
-              <button
-                onClick={handleLogin}
-                disabled={loggingIn}
-                className="flex-1 btn-primary"
-              >
-                <LogIn size={18} />
-                {loggingIn ? 'Connexion...' : 'Se connecter'}
               </button>
             </div>
           </div>
