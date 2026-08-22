@@ -611,11 +611,21 @@ export default function Home() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+    }).catch(() => {
+      // ignore session errors — app works without login
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-    return () => subscription.unsubscribe();
+    let subscription: { unsubscribe: () => void } | null = null;
+    try {
+      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+      });
+      subscription = data.subscription;
+    } catch {
+      // ignore
+    }
+    return () => {
+      try { subscription?.unsubscribe(); } catch { /* ignore */ }
+    };
   }, []);
 
   useEffect(() => {
